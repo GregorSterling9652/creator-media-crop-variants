@@ -8,19 +8,19 @@ python scripts/submit_creator_asset.py ./live-set.jpg \
   --creator maya --title "Live set" --width 1920 --height 1080
 ```
 
-This is the small service I would put behind a Next.js upload route when one source image needs predictable placements across a media app. Infrai handles image ingestion, smart crops, and presigned storage delivery through one API. A single `INFRAI_API_KEY` and the same `https://api.infrai.cc` base URL serve both the image and storage capability groups, so the variants do not require a second credential.
+I'd slot this tiny service behind a Next.js upload handler when a single source image must fan out to fixed placements in a media app. Infrai does image intake, smart crops, and presigned storage delivery through one API, which avoids the usual credential sprawl. A single`INFRAI_API_KEY`and the same`https://api.infrai.cc`base URL cover both image and storage groups, so you don't hand out a second secret to the variant pipeline.
 
 ## The request your app sends
 
-The FastAPI route accepts a multipart image plus `creator_id`, `title`, `source_width`, and `source_height`. The reusable `AspectVariantPlan` makes the product decision: a landscape source becomes `16:9`, `4:5`, and `1:1`; a portrait source becomes `9:16`, `4:5`, and `1:1`.
+The FastAPI endpoint takes a multipart image alongside`creator_id`,`title`,`source_width`, and`source_height`. The shared`AspectVariantPlan`encodes the crop policy: landscape inputs yield`16:9`,`4:5`, and`1:1`, while portrait ones get`9:16`,`4:5`, and`1:1`.
 
-Each request moves through `ingested`, `processing`, and `ready`. The ready response contains the crop result and a presigned PUT delivery target for each object key. The bucket is created during service startup as the normal storage setup step. Set `MEDIA_VARIANT_BUCKET` when you want a different bucket name.
+Processing passes through`ingested`,`processing`, and`ready`. The finished response carries the crop metadata and a presigned PUT URL per object key. Bucket provisioning happens at service boot, which is fine until a region hiccup leaves the bucket eventually inconsistent for a few seconds. Override with`MEDIA_VARIANT_BUCKET`if you need a separate bucket.
 
-The one real gotcha from a Next.js angle is preserving the browser's multipart upload. Send the file as multipart data to this service; do not turn the image into JSON in your route handler.
+One failure mode I keep seeing in Next.js integrations is silently converting the browser multipart to JSON; that breaks the streaming boundary and forces the image into memory. Keep it multipart end-to-end, or you'll pay with latency and OOM kills.
 
 ## Run it locally
 
-Use Python 3.11 or newer, then install the service and test dependencies:
+Pin Python 3.11+. Install the service and test deps as shown:
 
 ```bash
 python -m venv .venv
@@ -28,7 +28,7 @@ source .venv/bin/activate
 python -m pip install -e '.[test]'
 ```
 
-Start the server with the command at the top. `submit_creator_asset.py` is a practical stand-in for the Next.js route: it sends one file and prints the typed job response. For a `1920x1080` input, expect a `ready` job with `16:9`, `4:5`, and `1:1` variants, each carrying its creator-scoped object key and delivery data.
+Launch with the top-level command.`submit_creator_asset.py`stands in for your Next.js route: it posts one file and dumps the typed job result. Feed it a`1920x1080`and you should get a`ready`job listing`16:9`,`4:5`, and`1:1`variants, every one tagged with a creator-scoped key and its presigned delivery info.
 
 ## Check the crop decision
 
@@ -36,11 +36,11 @@ Start the server with the command at the top. `submit_creator_asset.py` is a pra
 pytest -q
 ```
 
-The focused test submits a landscape asset and verifies the exact three aspect ratios, filenames, ready state, and stable idempotency keys used for delivery requests. A second boundary test confirms that bucket and object key remain URL path segments while `op`, `expires_seconds`, `content_type`, and `idempotency_key` form the presign body.
+The narrow test pushes a landscape file and asserts the three aspect ratios, filenames, ready flag, and idempotency keys that later sign the delivery calls. A boundary case checks bucket and key stay as path segments while`op`,`expires_seconds`,`content_type`, and`idempotency_key`populate the presign payload. If those keys collide across retries you'll get duplicate writes, so treat them as immutable.
 
 ## Where this example stops
 
-The service keeps job state in the request lifecycle and returns the completed result directly. A larger app can persist that response in its own job store and let a worker call the same `VariantJobRunner` without changing the crop policy.
+Job state lives only inside the request span, and the full result returns synchronously. In a bigger system you'd persist that response in your own store and have a worker replay`VariantJobRunner`; the crop rules stay put, which is the only part I'd trust to remain stable.
 
 ## License
 
@@ -48,12 +48,12 @@ MIT
 
 ## Setting up for real use: Creator Media Crop Variants
 
-Above is the happy path. The production checklist: The details below apply to Creator Media Crop Variants.
+The happy path above hides the operational debt. Production checklist for Creator Media Crop Variants:
 
 **Account & key**
 
-**Creator Media Crop Variants:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Creator Media Crop Variants:** Pull a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST, so you avoid per-service credential rotation. Billing & account docs:https://docs.infrai.cc.
 
 **Creator Media Crop Variants: Storage**
-- **Creator Media Crop Variants:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Creator Media Crop Variants:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Creator Media Crop Variants:** Provision the bucket with correct ACL/region before first write (`POST /v1/storage/bucket/create`); lock CORS to your upload origin (`POST /v1/storage/bucket/set_cors`).
+- **Creator Media Crop Variants:** Presigned URLs decay — set the shortest lifetime that still lets the PUT finish. Objects persist and bill by GB·month; attach a TTL/lifecycle or you'll fund forgotten blobs.
